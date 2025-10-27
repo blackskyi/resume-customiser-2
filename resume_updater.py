@@ -54,61 +54,54 @@ class ResumeUpdater:
         print(f'✓ Loaded resume: {os.path.basename(self.original_resume_path)}')
     
     def extract_all_skills(self, job_description):
-        """Extract ALL skills dynamically from job description"""
+        """Extract ALL skills dynamically from job description - ONLY REAL SKILLS"""
         try:
             found_skills = set()
             
-            # Extract skills with "experience", "expertise", etc
+            # Known tech/skill keywords to look for (whitelist approach)
+            known_skills = [
+                'AWS', 'Azure', 'GCP', 'Google Cloud', 'Cloud',
+                'ECS', 'Fargate', 'Lambda', 'EC2', 'S3', 'VPC', 'RDS', 'DynamoDB', 'Aurora',
+                'Kubernetes', 'K8s', 'Docker', 'Container', 'Helm', 'ArgoCD', 'OpenShift',
+                'Jenkins', 'GitLab', 'GitHub', 'Actions', 'CI/CD', 'Pipeline',
+                'Terraform', 'CloudFormation', 'CDK', 'Pulumi', 'Ansible', 'Infrastructure as Code', 'IaC',
+                'Python', 'Bash', 'Shell', 'Scripting', 'Script',
+                'Kafka', 'Kinesis', 'RabbitMQ', 'Redis', 'Messaging',
+                'Prometheus', 'Grafana', 'DataDog', 'Monitoring',
+                'Organizations', 'SCPs', 'Control Policies', 'IAM', 'Security Hub', 'AWS Config',
+                'Config rules', 'Compliance', 'Security', 'DevSecOps', 'Security governance',
+                'IQ scripts', 'Automation', 'Orchestration',
+                'PostgreSQL', 'MySQL', 'MongoDB', 'Database',
+                'API', 'Microservices', 'BFF', 'Backend for Frontend',
+                'SAFe', 'Agile', 'Scrum', 'Kanban',
+                'Git', 'Version control', 'YAML', 'JSON', 'XML'
+            ]
+            
+            job_desc_lower = job_description.lower()
+            
+            # Search for known skills in the job description
+            for skill in known_skills:
+                if skill.lower() in job_desc_lower:
+                    found_skills.add(skill)
+            
+            # Only extract phrases that end with specific keywords
             phrases = re.findall(
-                r'(?:experience|expertise|proficiency|skill|knowledge|familiarity)[\s\w]*?(?:in|with)[\s]*([A-Za-z\s\-/+\.()]{3,80}?)(?:,|and|or|;|\.|$)',
+                r'(?:experience|expertise|proficiency|strong (?:understanding|knowledge))[\s\w]*?(?:in|with)[\s]*([A-Za-z\s\-/+\.()]{3,50}?)(?:,|and|\.|$)',
                 job_description,
                 re.IGNORECASE
             )
             
             for phrase in phrases:
-                cleaned = phrase.strip()
-                if len(cleaned) > 2:
+                cleaned = phrase.strip().rstrip(',.')
+                # Only keep if it looks like a skill (contains tech words or is short)
+                if len(cleaned) > 2 and len(cleaned) < 40 and any(tech.lower() in cleaned.lower() for tech in known_skills):
                     found_skills.add(cleaned)
             
-            # Extract tools/frameworks/platforms
-            tools = re.findall(
-                r'([A-Za-z0-9\s\-/+\.()]+?)(?:\s+tools?|\s+frameworks?|\s+platforms?)',
-                job_description,
-                re.IGNORECASE
-            )
-            
-            for tool in tools:
-                cleaned = tool.strip()
-                if len(cleaned) > 2:
-                    found_skills.add(cleaned)
-            
-            # Extract capabilities
-            capabilities = re.findall(
-                r'(?:ability|capable|expertise)[\s\w]*?(?:to|in|with)[\s]*([A-Za-z\s\-/+\.()]{3,80}?)(?:,|and|or|;|\.|$)',
-                job_description,
-                re.IGNORECASE
-            )
-            
-            for capability in capabilities:
-                cleaned = capability.strip()
-                if len(cleaned) > 2:
-                    found_skills.add(cleaned)
-            
-            # Extract capitalized terms
-            technical_terms = re.findall(
-                r'\b([A-Z][a-zA-Z0-9\-/+\.]*(?:\s+[A-Z][a-zA-Z0-9\-/+\.]*)*)\b',
-                job_description
-            )
-            
-            for term in technical_terms:
-                if len(term) > 2 and term not in ['The', 'This', 'Job', 'Role', 'Must', 'Should', 'Will', 'Have']:
-                    found_skills.add(term)
-            
-            # Clean up
+            # Clean up duplicates and filter
             final_skills = set()
             for skill in found_skills:
                 cleaned = skill.strip().rstrip(',.')
-                if cleaned and len(cleaned) > 2:
+                if cleaned and len(cleaned) > 1:
                     final_skills.add(cleaned)
             
             return sorted(list(final_skills))
