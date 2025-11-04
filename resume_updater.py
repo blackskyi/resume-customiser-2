@@ -261,7 +261,7 @@ class ResumeUpdater:
 **CRITICAL: Output ONLY the bullet points, one per line. No explanations, no headers, no numbering - just {len(skills_to_generate)} plain text bullet points.**"""
 
                 response = self.claude_client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
+                    model="claude-sonnet-4-5",  # Latest Sonnet 4.5 model
                     max_tokens=2500,
                     temperature=0.7,
                     messages=[{
