@@ -70,7 +70,7 @@ def main():
         updater = ResumeUpdater(original_resume, output_dir)
 
         # Run customization
-        output_file = updater.update_resume(TEST_JOB_DESCRIPTION)
+        output_file, added_keywords = updater.update_resume(TEST_JOB_DESCRIPTION)
 
         if output_file:
             print("\n" + "=" * 70)

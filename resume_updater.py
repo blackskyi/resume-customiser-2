@@ -988,25 +988,59 @@ class ResumeUpdater:
         print(f'\n✅ Saved: {os.path.basename(output_path)}')
         return output_path
     
+    def verify_keywords_added(self, original_text, updated_text, missing_skills):
+        """Verify which keywords were successfully added (no extra API calls)"""
+        original_lower = original_text.lower()
+        updated_lower = updated_text.lower()
+
+        added_keywords = []
+        already_present = []
+        not_added = []
+
+        for skill in missing_skills:
+            skill_lower = skill.lower()
+            was_present = skill_lower in original_lower
+            is_present = skill_lower in updated_lower
+
+            if is_present and not was_present:
+                added_keywords.append(skill)
+            elif is_present and was_present:
+                already_present.append(skill)
+            else:
+                not_added.append(skill)
+
+        return {
+            'added': added_keywords,
+            'already_present': already_present,
+            'not_added': not_added
+        }
+
     def update_resume(self, requirements_text):
-        """Main update method"""
+        """Main update method - returns (output_path, added_keywords)"""
         print('\n' + '='*60)
         print('RESUME UPDATER - GUARANTEED SKILL COVERAGE')
         print('='*60)
-        
+
         try:
             self.load_resume()
+
+            # Store original text for verification
+            original_text = '\n'.join([p.text for p in self.doc.paragraphs])
+
             requirements = self.parse_requirements(requirements_text)
-            
+
             if not any([requirements.get('missing_skills'), requirements.get('cloud_services')]):
                 print('\n⚠️  No relevant skills found')
-                return None
-            
+                return None, []
+
+            # Track missing skills for verification
+            missing_skills = requirements.get('missing_skills', [])
+
             # Generate bullets for missing skills
             generated_bullets = []
-            if requirements.get('missing_skills'):
+            if missing_skills:
                 generated_bullets = self.generate_missing_skills_bullets(
-                    requirements['missing_skills'],
+                    missing_skills,
                     requirements_text
                 )
 
@@ -1045,21 +1079,50 @@ class ResumeUpdater:
                     # Add them to summary instead
                     print('  ↳ Adding remaining bullets to summary')
                     self.insert_summary_bullets(job_bullets)
-            
+
             self.update_technical_skills(requirements)
+
+            # Get updated text for verification
+            updated_text = '\n'.join([p.text for p in self.doc.paragraphs])
+
+            # Verify keywords (no extra API calls - just text comparison)
+            verification = self.verify_keywords_added(original_text, updated_text, missing_skills)
+
+            # Print verification results
+            print('\n' + '='*60)
+            print('📊 KEYWORD VERIFICATION')
+            print('='*60)
+
+            if verification['added']:
+                print(f"\n✅ Added ({len(verification['added'])} keywords):")
+                for kw in verification['added']:
+                    print(f"   • {kw}")
+
+            if verification['already_present']:
+                print(f"\n⚪ Already Present ({len(verification['already_present'])} keywords):")
+                for kw in verification['already_present'][:5]:  # Show first 5
+                    print(f"   • {kw}")
+                if len(verification['already_present']) > 5:
+                    print(f"   ... and {len(verification['already_present']) - 5} more")
+
+            if verification['not_added']:
+                print(f"\n❌ Not Added ({len(verification['not_added'])} keywords):")
+                for kw in verification['not_added']:
+                    print(f"   • {kw}")
+
             output_path = self.save_resume()
-            
+
             print('\n' + '='*60)
             print('✅ UPDATE COMPLETE!')
             print('='*60)
-            
-            return output_path
-        
+
+            return output_path, verification['added']
+
         except Exception as e:
             print(f'\n❌ Error: {e}')
             import traceback
             traceback.print_exc()
-            return None
+            return None, []
 
 
 def main():
