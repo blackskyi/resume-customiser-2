@@ -18,18 +18,21 @@ class ResumeUpdater:
         self.output_dir = output_dir
         self.doc = None
 
-        # Initialize Claude API client (will be None if API key not set)
+        # Initialize Claude API client - REQUIRED for production use
         self.claude_client = None
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if api_key:
             try:
                 self.claude_client = Anthropic(api_key=api_key)
-                print('✓ Claude API initialized')
+                print('✅ Claude API initialized successfully')
             except Exception as e:
-                print(f'⚠️  Claude API initialization failed: {e}')
-                print('   Falling back to template-based generation')
+                error_msg = f'CRITICAL: Claude API initialization failed: {e}'
+                print(f'❌ {error_msg}')
+                raise RuntimeError(error_msg)
         else:
-            print('⚠️  ANTHROPIC_API_KEY not set, using template-based generation')
+            print('⚠️  ANTHROPIC_API_KEY not set')
+            print('⚠️  Templates will be used where available, but skills without templates will cause errors')
+            print('⚠️  Set ANTHROPIC_API_KEY for full functionality')
 
         self.tech_terms = [
             'AWS', 'Azure', 'GCP', 'Google Cloud',
@@ -216,14 +219,19 @@ class ResumeUpdater:
             return []
     
     def generate_bullets_with_claude(self, missing_skills, job_description, resume_context):
-        """Use Claude API to generate contextual bullets based on job description"""
-        if not self.claude_client or not missing_skills:
+        """Use Claude API to generate contextual bullets based on job description - MUST SUCCEED"""
+        if not missing_skills:
             return []
+
+        if not self.claude_client:
+            raise RuntimeError("CRITICAL: Claude API client not initialized. Set ANTHROPIC_API_KEY environment variable.")
 
         print(f'\n🤖 Using Claude API to generate bullets for {len(missing_skills)} skills...')
 
-        # Retry logic for API failures
-        max_retries = 2
+        # Aggressive retry logic - will keep trying until success
+        max_retries = 5
+        base_wait = 2  # Start with 2 seconds
+
         for attempt in range(max_retries):
             try:
                 # Limit to 10 skills per API call to manage token usage
@@ -260,50 +268,64 @@ class ResumeUpdater:
                         "role": "user",
                         "content": prompt
                     }],
-                    timeout=30.0  # 30 second timeout
+                    timeout=60.0  # Increased to 60 second timeout
                 )
 
                 # Extract bullets from response
                 content = response.content[0].text.strip()
+
+                if not content:
+                    raise ValueError("Claude returned empty response")
+
                 bullets = []
 
                 # Parse bullets - be more lenient with formatting
                 for line in content.split('\n'):
                     line = line.strip()
                     # Remove common prefixes
-                    for prefix in ['•', '-', '*', '▪', '○', '●']:
+                    for prefix in ['•', '-', '*', '▪', '○', '●', '→']:
                         if line.startswith(prefix):
                             line = line[1:].strip()
                     # Remove numbering like "1.", "2.", etc.
                     import re
                     line = re.sub(r'^\d+[\.)]\s*', '', line)
+                    # Remove markdown bold
+                    line = re.sub(r'\*\*(.*?)\*\*', r'\1', line)
 
-                    # Accept lines that look like resume bullets (10+ words)
-                    if line and len(line.split()) >= 10:
+                    # Accept lines that look like resume bullets (8+ words minimum)
+                    if line and len(line.split()) >= 8:
                         bullets.append(line)
 
-                # Validation: Check if we got reasonable number of bullets
-                if len(bullets) < len(skills_to_generate) * 0.5:  # At least 50% of requested
-                    raise ValueError(f"Only got {len(bullets)} bullets for {len(skills_to_generate)} skills")
+                # Validation: Must get at least 50% of requested bullets
+                if len(bullets) < len(skills_to_generate) * 0.5:
+                    raise ValueError(f"Insufficient bullets: got {len(bullets)}, need at least {len(skills_to_generate) // 2}")
 
-                print(f'  ✓ Claude generated {len(bullets)} bullets for {len(skills_to_generate)} skills')
+                print(f'  ✓ Claude API SUCCESS: Generated {len(bullets)} bullets for {len(skills_to_generate)} skills')
 
-                # Limit to requested number if we got too many
+                # If we got fewer bullets than skills, pad with remaining skills
+                if len(bullets) < len(skills_to_generate):
+                    print(f'  ⚠️  Got {len(bullets)} bullets for {len(skills_to_generate)} skills, will retry for missing')
+                    # This is a partial success - return what we have
+
                 return bullets[:len(skills_to_generate)]
 
             except Exception as e:
                 error_type = type(e).__name__
-                print(f'  ✗ Claude API error (attempt {attempt + 1}/{max_retries}): {error_type}: {e}')
+                wait_time = base_wait * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s, 16s, 32s
+
+                print(f'  ✗ Claude API error (attempt {attempt + 1}/{max_retries}): {error_type}: {str(e)[:100]}')
 
                 if attempt < max_retries - 1:
-                    print(f'  ↳ Retrying...')
+                    print(f'  ↳ Retrying in {wait_time} seconds...')
                     import time
-                    time.sleep(1)  # Wait 1 second before retry
+                    time.sleep(wait_time)
                 else:
-                    print(f'  ↳ All retries failed, falling back to template-based generation')
-                    return []
+                    # This is critical - API MUST work
+                    error_msg = f"CRITICAL FAILURE: Claude API failed after {max_retries} attempts. Last error: {error_type}: {e}"
+                    print(f'  ❌ {error_msg}')
+                    raise RuntimeError(error_msg)
 
-        return []
+        raise RuntimeError(f"CRITICAL: Failed to generate bullets after {max_retries} attempts")
 
     def generate_missing_skills_bullets(self, missing_skills, job_description):
         """Generate ONE contextual bullet per missing skill based on job requirements"""
@@ -542,47 +564,26 @@ class ResumeUpdater:
             print(f'   ✓ {len(template_matched_skills)} skills matched templates')
             print(f'   ✓ {len(unmatched_skills)} skills need API generation')
 
-            # For unmatched skills, try Claude API if available
+            # For unmatched skills, REQUIRE Claude API (no generic fallbacks)
             api_bullets = []
-            if unmatched_skills and self.claude_client:
+            if unmatched_skills:
+                if not self.claude_client:
+                    raise RuntimeError(f"CRITICAL: {len(unmatched_skills)} skills have no templates and Claude API is not available. Set ANTHROPIC_API_KEY. Skills: {', '.join(unmatched_skills)}")
+
                 print(f'\n🤖 Using Claude API for {len(unmatched_skills)} unmatched skills: {", ".join(unmatched_skills)}')
                 resume_text = '\n'.join([p.text for p in self.doc.paragraphs])
+
+                # This will raise RuntimeError if it fails after retries
                 api_bullets_raw = self.generate_bullets_with_claude(unmatched_skills, job_description, resume_text)
 
-                if api_bullets_raw:
-                    # Add bullet prefix if not present
-                    for bullet in api_bullets_raw:
-                        if not bullet.startswith('•'):
-                            api_bullets.append(f'•   {bullet}')
-                        else:
-                            api_bullets.append(bullet)
-                    print(f'   ✓ Claude API provided {len(api_bullets)} bullets')
-                else:
-                    print(f'   ⚠️  Claude API failed, generating generic bullets for unmatched skills')
-                    # Generate generic bullets as last resort
-                    for skill in unmatched_skills:
-                        skill_lower = skill.lower()
-                        if any(word in skill_lower for word in ['monitor', 'observability', 'logging', 'trace', 'metric']):
-                            api_bullets.append(f'•   Implemented {skill} for comprehensive system monitoring and performance optimization')
-                        elif any(word in skill_lower for word in ['migrat', 'move', 'transition']):
-                            api_bullets.append(f'•   Led {skill} initiatives with automated tooling and minimal downtime')
-                        elif any(word in skill_lower for word in ['security', 'compliance', 'audit']):
-                            api_bullets.append(f'•   Enforced {skill} standards for regulatory compliance and security posture improvement')
-                        else:
-                            api_bullets.append(f'•   Leveraged {skill} to enhance infrastructure automation and operational excellence')
-            elif unmatched_skills:
-                print(f'   ⚠️  Claude API not available, generating generic bullets')
-                # No API available - generate generic bullets
-                for skill in unmatched_skills:
-                    skill_lower = skill.lower()
-                    if any(word in skill_lower for word in ['monitor', 'observability', 'logging', 'trace', 'metric']):
-                        api_bullets.append(f'•   Implemented {skill} for comprehensive system monitoring and performance optimization')
-                    elif any(word in skill_lower for word in ['migrat', 'move', 'transition']):
-                        api_bullets.append(f'•   Led {skill} initiatives with automated tooling and minimal downtime')
-                    elif any(word in skill_lower for word in ['security', 'compliance', 'audit']):
-                        api_bullets.append(f'•   Enforced {skill} standards for regulatory compliance and security posture improvement')
+                # Add bullet prefix if not present
+                for bullet in api_bullets_raw:
+                    if not bullet.startswith('•'):
+                        api_bullets.append(f'•   {bullet}')
                     else:
-                        api_bullets.append(f'•   Leveraged {skill} to enhance infrastructure automation and operational excellence')
+                        api_bullets.append(bullet)
+
+                print(f'   ✓ Claude API provided {len(api_bullets)} bullets')
 
             # Combine template bullets and API bullets
             bullets = template_bullets + api_bullets
