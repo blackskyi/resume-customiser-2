@@ -266,11 +266,9 @@ class ResumeUpdater:
             for line in content.split('\n'):
                 line = line.strip()
                 if line and len(line) > 10:
-                    # Ensure bullet starts with proper format
-                    if not line.startswith('•'):
-                        line = '•   ' + line
-                    elif not line.startswith('•   '):
-                        line = line.replace('•', '•   ', 1)
+                    # Remove bullet if Claude added it (resume uses plain paragraphs)
+                    if line.startswith('•'):
+                        line = line.lstrip('•').strip()
                     bullets.append(line)
 
             print(f'  ✓ Claude generated {len(bullets)} bullets')
@@ -676,55 +674,69 @@ class ResumeUpdater:
             insertion_index = None
             reference_para = None
 
-            # Try multiple anchor points for flexibility
-            anchor_texts = [
-                'Implemented reproducible build workflows by integrating',
-                'Conan',
-                'build workflows',
-                '•'  # Find any bullet point in summary
-            ]
-
+            # Find BACKGROUND Summary or PROFESSIONAL SUMMARY section
             for i, para in enumerate(self.doc.paragraphs):
-                para_text = para.text.strip()
-                # Look for any bullet point as potential insertion point
-                if para_text.startswith('•') and len(para_text) > 10:
-                    # Found a bullet, use this as reference
-                    reference_para = para
-                    insertion_index = i + 1
-                    # Continue searching for the specific anchor if available
-                    for anchor in anchor_texts[:2]:  # Check specific anchors first
-                        if anchor in para.text:
-                            insertion_index = i + 1
+                para_text = para.text.strip().upper()
+
+                if 'BACKGROUND' in para_text and 'SUMMARY' in para_text:
+                    print(f'  ✓ Found BACKGROUND Summary at line {i}')
+                    # Find the last paragraph before next section (TECHNICAL SKILLS or WORK EXPERIENCE)
+                    for j in range(i+1, min(i+40, len(self.doc.paragraphs))):
+                        next_text = self.doc.paragraphs[j].text.strip().upper()
+                        # Stop if we hit another section
+                        if 'TECHNICAL SKILLS' in next_text or 'WORK EXPERIENCE' in next_text or 'EDUCATION' in next_text:
+                            # Insert before this section
+                            reference_para = self.doc.paragraphs[j-1]
+                            insertion_index = j
+                            print(f'  ✓ Will insert at line {insertion_index} (before {next_text[:30]}...)')
+                            break
+                    if insertion_index:
+                        break
+                elif 'PROFESSIONAL SUMMARY' in para_text or para_text == 'SUMMARY':
+                    print(f'  ✓ Found summary section at line {i}')
+                    # Same logic as above
+                    for j in range(i+1, min(i+40, len(self.doc.paragraphs))):
+                        next_text = self.doc.paragraphs[j].text.strip().upper()
+                        if 'TECHNICAL SKILLS' in next_text or 'WORK EXPERIENCE' in next_text or 'EDUCATION' in next_text:
+                            reference_para = self.doc.paragraphs[j-1]
+                            insertion_index = j
+                            print(f'  ✓ Will insert at line {insertion_index}')
                             break
                     if insertion_index:
                         break
 
-            if not insertion_index and reference_para is None:
-                # Fallback: find "PROFESSIONAL SUMMARY" or similar section
-                for i, para in enumerate(self.doc.paragraphs):
-                    if 'SUMMARY' in para.text.upper() or 'PROFESSIONAL SUMMARY' in para.text.upper():
-                        # Look for first bullet after this heading
-                        for j in range(i+1, min(i+20, len(self.doc.paragraphs))):
-                            if self.doc.paragraphs[j].text.strip().startswith('•'):
-                                reference_para = self.doc.paragraphs[j]
-                                insertion_index = j + 1
-                                break
-                        break
-
             if insertion_index and reference_para:
-                # Copy formatting from reference paragraph
+                # Copy formatting from reference paragraph (List Paragraph style)
                 for bullet_text in reversed(bullets):
+                    # Remove bullet character if present (we'll use Word's list formatting)
+                    if bullet_text.startswith('•'):
+                        bullet_text = bullet_text.lstrip('•').strip()
+
                     new_para = reference_para.insert_paragraph_before()
                     new_para.text = bullet_text
 
-                    # Preserve ALL formatting attributes
+                    # Preserve ALL formatting attributes including list style
                     new_para.paragraph_format.left_indent = reference_para.paragraph_format.left_indent
                     new_para.paragraph_format.first_line_indent = reference_para.paragraph_format.first_line_indent
                     new_para.paragraph_format.space_before = reference_para.paragraph_format.space_before
                     new_para.paragraph_format.space_after = reference_para.paragraph_format.space_after
                     new_para.paragraph_format.line_spacing = reference_para.paragraph_format.line_spacing
                     new_para.paragraph_format.alignment = reference_para.paragraph_format.alignment
+
+                    # CRITICAL: Copy the List Paragraph style
                     new_para.style = reference_para.style
+
+                    # Copy numbering format if present
+                    try:
+                        if hasattr(reference_para._element, 'pPr') and reference_para._element.pPr is not None:
+                            ref_pPr = reference_para._element.pPr
+                            ref_numPr = ref_pPr.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}numPr')
+                            if ref_numPr is not None:
+                                from copy import deepcopy
+                                new_pPr = new_para._element.get_or_add_pPr()
+                                new_pPr.append(deepcopy(ref_numPr))
+                    except Exception as e:
+                        print(f'    Warning: Could not copy numbering: {e}')
 
                     # Apply selective bold formatting
                     self.make_selective_bold(new_para, self.tech_terms)
@@ -761,8 +773,8 @@ class ResumeUpdater:
                     for j in range(i, min(i+60, len(self.doc.paragraphs))):
                         para_text = self.doc.paragraphs[j].text.strip()
 
-                        # Look for existing bullet points as reference
-                        if para_text.startswith('•') and len(para_text) > 10:
+                        # Look for List Paragraph style (bullets)
+                        if (self.doc.paragraphs[j].style.name == 'List Paragraph' and len(para_text) > 10):
                             reference_para = self.doc.paragraphs[j]
 
                             # Check if this is a good insertion point (after first few bullets)
@@ -783,6 +795,10 @@ class ResumeUpdater:
 
                                 # Insert bullets in reverse order
                                 for addition in reversed(bullets):
+                                    # Remove bullet character if present
+                                    if addition.startswith('•'):
+                                        addition = addition.lstrip('•').strip()
+
                                     new_p = ref_para.insert_paragraph_before()
                                     new_p.text = addition
 
@@ -794,6 +810,18 @@ class ResumeUpdater:
                                     new_p.paragraph_format.line_spacing = reference_para.paragraph_format.line_spacing
                                     new_p.paragraph_format.alignment = reference_para.paragraph_format.alignment
                                     new_p.style = reference_para.style
+
+                                    # Copy numbering format
+                                    try:
+                                        if hasattr(reference_para._element, 'pPr') and reference_para._element.pPr is not None:
+                                            ref_pPr = reference_para._element.pPr
+                                            ref_numPr = ref_pPr.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}numPr')
+                                            if ref_numPr is not None:
+                                                from copy import deepcopy
+                                                new_pPr = new_p._element.get_or_add_pPr()
+                                                new_pPr.append(deepcopy(ref_numPr))
+                                    except:
+                                        pass
 
                                     # Apply selective bold
                                     self.make_selective_bold(new_p, self.tech_terms)
