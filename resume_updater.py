@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Resume Updater Script - ENHANCED VERSION
+Resume Updater Script - ENHANCED VERSION WITH CLAUDE API
 Intelligently updates your DevOps resume based on job requirements
 """
 
@@ -10,13 +10,27 @@ import os
 import sys
 import re
 from datetime import datetime
+from anthropic import Anthropic
 
 class ResumeUpdater:
     def __init__(self, original_resume_path, output_dir):
         self.original_resume_path = original_resume_path
         self.output_dir = output_dir
         self.doc = None
-        
+
+        # Initialize Claude API client (will be None if API key not set)
+        self.claude_client = None
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if api_key:
+            try:
+                self.claude_client = Anthropic(api_key=api_key)
+                print('✓ Claude API initialized')
+            except Exception as e:
+                print(f'⚠️  Claude API initialization failed: {e}')
+                print('   Falling back to template-based generation')
+        else:
+            print('⚠️  ANTHROPIC_API_KEY not set, using template-based generation')
+
         self.tech_terms = [
             'AWS', 'Azure', 'GCP', 'Google Cloud',
             'ECS', 'Fargate', 'Lambda', 'EC2', 'S3', 'VPC', 'ELB', 'CloudFormation',
@@ -201,6 +215,72 @@ class ResumeUpdater:
             print(f"Error finding missing skills: {e}")
             return []
     
+    def generate_bullets_with_claude(self, missing_skills, job_description, resume_context):
+        """Use Claude API to generate contextual bullets based on job description"""
+        if not self.claude_client or not missing_skills:
+            return []
+
+        print(f'\n🤖 Using Claude API to generate bullets for {len(missing_skills)} skills...')
+
+        try:
+            # Limit to 10 skills per API call to manage token usage
+            skills_to_generate = missing_skills[:10]
+
+            prompt = f"""You are an expert DevOps resume writer. Generate professional resume bullet points for the following skills based on the job requirements.
+
+**Job Description:**
+{job_description[:2000]}
+
+**Skills to highlight:**
+{', '.join(skills_to_generate)}
+
+**Existing Resume Context (for style matching):**
+{resume_context[:1000]}
+
+**Requirements:**
+1. Generate ONE bullet point per skill
+2. Each bullet should be 15-25 words
+3. Use strong action verbs (Implemented, Architected, Deployed, Configured, Managed, etc.)
+4. Include specific technical details and measurable impact where possible
+5. Match the professional tone of the existing resume
+6. Format: Start with '• ' (bullet and spaces)
+7. Focus on DevOps/Cloud/Infrastructure achievements
+8. Make it relevant to the job description
+
+**Output only the bullet points, one per line, nothing else.**"""
+
+            response = self.claude_client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=2000,
+                temperature=0.7,
+                messages=[{
+                    "role": "user",
+                    "content": prompt
+                }]
+            )
+
+            # Extract bullets from response
+            content = response.content[0].text.strip()
+            bullets = []
+
+            for line in content.split('\n'):
+                line = line.strip()
+                if line and len(line) > 10:
+                    # Ensure bullet starts with proper format
+                    if not line.startswith('•'):
+                        line = '•   ' + line
+                    elif not line.startswith('•   '):
+                        line = line.replace('•', '•   ', 1)
+                    bullets.append(line)
+
+            print(f'  ✓ Claude generated {len(bullets)} bullets')
+            return bullets
+
+        except Exception as e:
+            print(f'  ✗ Claude API error: {e}')
+            print('  ↳ Falling back to template-based generation')
+            return []
+
     def generate_missing_skills_bullets(self, missing_skills, job_description):
         """Generate ONE contextual bullet per missing skill based on job requirements"""
         bullets = []
@@ -209,6 +289,15 @@ class ResumeUpdater:
             return bullets
 
         print(f'\n✨ Generating bullets for {len(missing_skills)} missing skills...')
+
+        # Try Claude API first if available
+        resume_text = '\n'.join([p.text for p in self.doc.paragraphs])
+        if self.claude_client:
+            claude_bullets = self.generate_bullets_with_claude(missing_skills, job_description, resume_text)
+            if claude_bullets:
+                return claude_bullets
+            # If Claude fails, fall through to template-based generation
+            print('  ↳ Using template-based generation as fallback')
 
         # Comprehensive skill templates with multiple variations
         skill_templates = {
