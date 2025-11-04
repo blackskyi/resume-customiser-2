@@ -222,11 +222,14 @@ class ResumeUpdater:
 
         print(f'\n🤖 Using Claude API to generate bullets for {len(missing_skills)} skills...')
 
-        try:
-            # Limit to 10 skills per API call to manage token usage
-            skills_to_generate = missing_skills[:10]
+        # Retry logic for API failures
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                # Limit to 10 skills per API call to manage token usage
+                skills_to_generate = missing_skills[:10]
 
-            prompt = f"""You are an expert DevOps resume writer. Generate professional resume bullet points for the following skills based on the job requirements.
+                prompt = f"""You are an expert DevOps resume writer. Generate professional resume bullet points for the following skills based on the job requirements.
 
 **Job Description:**
 {job_description[:2000]}
@@ -238,46 +241,69 @@ class ResumeUpdater:
 {resume_context[:1000]}
 
 **Requirements:**
-1. Generate ONE bullet point per skill
+1. Generate EXACTLY ONE bullet point per skill listed above ({len(skills_to_generate)} bullets total)
 2. Each bullet should be 15-25 words
 3. Use strong action verbs (Implemented, Architected, Deployed, Configured, Managed, etc.)
 4. Include specific technical details and measurable impact where possible
 5. Match the professional tone of the existing resume
-6. Format: Start with '• ' (bullet and spaces)
+6. DO NOT add '•' or bullet symbols - just the text
 7. Focus on DevOps/Cloud/Infrastructure achievements
 8. Make it relevant to the job description
 
-**Output only the bullet points, one per line, nothing else.**"""
+**CRITICAL: Output ONLY the bullet points, one per line. No explanations, no headers, no numbering - just {len(skills_to_generate)} plain text bullet points.**"""
 
-            response = self.claude_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=2000,
-                temperature=0.7,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
+                response = self.claude_client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=2500,
+                    temperature=0.7,
+                    messages=[{
+                        "role": "user",
+                        "content": prompt
+                    }],
+                    timeout=30.0  # 30 second timeout
+                )
 
-            # Extract bullets from response
-            content = response.content[0].text.strip()
-            bullets = []
+                # Extract bullets from response
+                content = response.content[0].text.strip()
+                bullets = []
 
-            for line in content.split('\n'):
-                line = line.strip()
-                if line and len(line) > 10:
-                    # Remove bullet if Claude added it (resume uses plain paragraphs)
-                    if line.startswith('•'):
-                        line = line.lstrip('•').strip()
-                    bullets.append(line)
+                # Parse bullets - be more lenient with formatting
+                for line in content.split('\n'):
+                    line = line.strip()
+                    # Remove common prefixes
+                    for prefix in ['•', '-', '*', '▪', '○', '●']:
+                        if line.startswith(prefix):
+                            line = line[1:].strip()
+                    # Remove numbering like "1.", "2.", etc.
+                    import re
+                    line = re.sub(r'^\d+[\.)]\s*', '', line)
 
-            print(f'  ✓ Claude generated {len(bullets)} bullets')
-            return bullets
+                    # Accept lines that look like resume bullets (10+ words)
+                    if line and len(line.split()) >= 10:
+                        bullets.append(line)
 
-        except Exception as e:
-            print(f'  ✗ Claude API error: {e}')
-            print('  ↳ Falling back to template-based generation')
-            return []
+                # Validation: Check if we got reasonable number of bullets
+                if len(bullets) < len(skills_to_generate) * 0.5:  # At least 50% of requested
+                    raise ValueError(f"Only got {len(bullets)} bullets for {len(skills_to_generate)} skills")
+
+                print(f'  ✓ Claude generated {len(bullets)} bullets for {len(skills_to_generate)} skills')
+
+                # Limit to requested number if we got too many
+                return bullets[:len(skills_to_generate)]
+
+            except Exception as e:
+                error_type = type(e).__name__
+                print(f'  ✗ Claude API error (attempt {attempt + 1}/{max_retries}): {error_type}: {e}')
+
+                if attempt < max_retries - 1:
+                    print(f'  ↳ Retrying...')
+                    import time
+                    time.sleep(1)  # Wait 1 second before retry
+                else:
+                    print(f'  ↳ All retries failed, falling back to template-based generation')
+                    return []
+
+        return []
 
     def generate_missing_skills_bullets(self, missing_skills, job_description):
         """Generate ONE contextual bullet per missing skill based on job requirements"""
@@ -287,15 +313,7 @@ class ResumeUpdater:
             return bullets
 
         print(f'\n✨ Generating bullets for {len(missing_skills)} missing skills...')
-
-        # Try Claude API first if available
-        resume_text = '\n'.join([p.text for p in self.doc.paragraphs])
-        if self.claude_client:
-            claude_bullets = self.generate_bullets_with_claude(missing_skills, job_description, resume_text)
-            if claude_bullets:
-                return claude_bullets
-            # If Claude fails, fall through to template-based generation
-            print('  ↳ Using template-based generation as fallback')
+        print(f'   Skills: {", ".join(missing_skills[:10])}{"..." if len(missing_skills) > 10 else ""}')
 
         # Comprehensive skill templates with multiple variations
         skill_templates = {
@@ -341,6 +359,10 @@ class ResumeUpdater:
             'CloudTrail': 'Configured CloudTrail for audit logging, compliance tracking, and security forensics',
             'Systems Manager': 'Utilized AWS Systems Manager for patch management, configuration compliance, and remote command execution',
             'Parameter Store': 'Managed application configurations using Parameter Store with encryption and version control',
+
+            # Cloud Migration
+            'Migration': 'Led cloud migration initiatives from on-premises to AWS with minimal downtime using AWS Migration Hub and Server Migration Service',
+            'Cloud Migration': 'Executed large-scale cloud migration projects including lift-and-shift and re-platforming strategies',
 
             # IaC Tools
             'Terraform': 'Developed reusable Terraform modules for infrastructure provisioning with state management and automated planning',
@@ -396,6 +418,8 @@ class ResumeUpdater:
             # Monitoring & Observability
             'Prometheus': 'Deployed Prometheus for metrics collection with custom exporters and alerting rules',
             'Grafana': 'Created Grafana dashboards for real-time infrastructure and application performance visualization',
+            'Loki': 'Implemented Grafana Loki for scalable log aggregation and correlation with metrics and traces',
+            'Tempo': 'Deployed Grafana Tempo for distributed tracing with seamless Grafana integration and span storage',
             'DataDog': 'Implemented DataDog for full-stack observability with APM, logs, and infrastructure monitoring',
             'ELK': 'Built centralized logging platform using ELK stack with custom parsers and retention policies',
             'Elasticsearch': 'Managed Elasticsearch clusters for log aggregation and full-text search capabilities',
@@ -485,52 +509,94 @@ class ResumeUpdater:
             # Limit to maximum of 15 bullets to avoid overwhelming the resume
             skills_to_process = missing_skills[:15]
 
+            # HYBRID APPROACH: Separate skills into template-matched and unmatched
+            template_matched_skills = []
+            unmatched_skills = []
+            template_bullets = []
+
+            print('\n📊 Categorizing skills:')
             for skill in skills_to_process:
                 skill_lower = skill.lower()
-                bullet_added = False
+                matched = False
 
-                # First, try exact match (case-insensitive)
+                # Try exact match first
                 for template_skill, template_bullet in skill_templates.items():
                     if skill_lower == template_skill.lower():
-                        bullet = f'•   {template_bullet}'
-                        bullets.append(bullet)
-                        bullet_added = True
+                        template_bullets.append(f'•   {template_bullet}')
+                        template_matched_skills.append(skill)
+                        matched = True
                         break
 
-                # If no exact match, try partial match
-                if not bullet_added:
+                # Try partial match if no exact match
+                if not matched:
                     for template_skill, template_bullet in skill_templates.items():
                         if skill_lower in template_skill.lower() or template_skill.lower() in skill_lower:
-                            bullet = f'•   {template_bullet}'
-                            bullets.append(bullet)
-                            bullet_added = True
+                            template_bullets.append(f'•   {template_bullet}')
+                            template_matched_skills.append(skill)
+                            matched = True
                             break
 
-                # If still no match, create a contextual generic bullet
-                if not bullet_added:
-                    # Check if it's a tool/technology or methodology
-                    if any(word in skill_lower for word in ['aws', 'azure', 'gcp', 'cloud']):
-                        bullet = f'•   Managed {skill} infrastructure for scalable and resilient cloud deployments'
-                    elif any(word in skill_lower for word in ['script', 'python', 'java', 'code']):
-                        bullet = f'•   Developed automation using {skill} for infrastructure management and operational efficiency'
-                    elif any(word in skill_lower for word in ['monitor', 'observability', 'logging']):
-                        bullet = f'•   Implemented {skill} for comprehensive system monitoring and performance optimization'
+                if not matched:
+                    unmatched_skills.append(skill)
+
+            print(f'   ✓ {len(template_matched_skills)} skills matched templates')
+            print(f'   ✓ {len(unmatched_skills)} skills need API generation')
+
+            # For unmatched skills, try Claude API if available
+            api_bullets = []
+            if unmatched_skills and self.claude_client:
+                print(f'\n🤖 Using Claude API for {len(unmatched_skills)} unmatched skills: {", ".join(unmatched_skills)}')
+                resume_text = '\n'.join([p.text for p in self.doc.paragraphs])
+                api_bullets_raw = self.generate_bullets_with_claude(unmatched_skills, job_description, resume_text)
+
+                if api_bullets_raw:
+                    # Add bullet prefix if not present
+                    for bullet in api_bullets_raw:
+                        if not bullet.startswith('•'):
+                            api_bullets.append(f'•   {bullet}')
+                        else:
+                            api_bullets.append(bullet)
+                    print(f'   ✓ Claude API provided {len(api_bullets)} bullets')
+                else:
+                    print(f'   ⚠️  Claude API failed, generating generic bullets for unmatched skills')
+                    # Generate generic bullets as last resort
+                    for skill in unmatched_skills:
+                        skill_lower = skill.lower()
+                        if any(word in skill_lower for word in ['monitor', 'observability', 'logging', 'trace', 'metric']):
+                            api_bullets.append(f'•   Implemented {skill} for comprehensive system monitoring and performance optimization')
+                        elif any(word in skill_lower for word in ['migrat', 'move', 'transition']):
+                            api_bullets.append(f'•   Led {skill} initiatives with automated tooling and minimal downtime')
+                        elif any(word in skill_lower for word in ['security', 'compliance', 'audit']):
+                            api_bullets.append(f'•   Enforced {skill} standards for regulatory compliance and security posture improvement')
+                        else:
+                            api_bullets.append(f'•   Leveraged {skill} to enhance infrastructure automation and operational excellence')
+            elif unmatched_skills:
+                print(f'   ⚠️  Claude API not available, generating generic bullets')
+                # No API available - generate generic bullets
+                for skill in unmatched_skills:
+                    skill_lower = skill.lower()
+                    if any(word in skill_lower for word in ['monitor', 'observability', 'logging', 'trace', 'metric']):
+                        api_bullets.append(f'•   Implemented {skill} for comprehensive system monitoring and performance optimization')
+                    elif any(word in skill_lower for word in ['migrat', 'move', 'transition']):
+                        api_bullets.append(f'•   Led {skill} initiatives with automated tooling and minimal downtime')
                     elif any(word in skill_lower for word in ['security', 'compliance', 'audit']):
-                        bullet = f'•   Enforced {skill} standards for regulatory compliance and security posture improvement'
-                    elif any(word in skill_lower for word in ['cicd', 'pipeline', 'jenkins', 'gitlab']):
-                        bullet = f'•   Built automated CI/CD workflows using {skill} for continuous integration and deployment'
-                    elif any(word in skill_lower for word in ['container', 'kubernetes', 'docker']):
-                        bullet = f'•   Orchestrated containerized applications using {skill} for improved portability and scaling'
+                        api_bullets.append(f'•   Enforced {skill} standards for regulatory compliance and security posture improvement')
                     else:
-                        bullet = f'•   Leveraged {skill} to enhance infrastructure automation and operational excellence'
+                        api_bullets.append(f'•   Leveraged {skill} to enhance infrastructure automation and operational excellence')
 
-                    bullets.append(bullet)
+            # Combine template bullets and API bullets
+            bullets = template_bullets + api_bullets
 
-            print(f'  ✓ Generated {len(bullets)} contextual bullets')
+            print(f'\n✅ Total bullets generated: {len(bullets)}')
+            print(f'   • Template-based: {len(template_bullets)}')
+            print(f'   • API/Generic: {len(api_bullets)}')
+
             return bullets
 
         except Exception as e:
             print(f"Error generating bullets: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def parse_requirements(self, requirements_text):
