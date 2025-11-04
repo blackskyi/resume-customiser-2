@@ -907,19 +907,49 @@ class ResumeUpdater:
                 print('\n⚠️  No relevant skills found')
                 return None
             
-            summary_bullets = []
-            job_bullets = []
-            
+            # Generate bullets for missing skills
+            generated_bullets = []
             if requirements.get('missing_skills'):
-                job_bullets = self.generate_missing_skills_bullets(
+                generated_bullets = self.generate_missing_skills_bullets(
                     requirements['missing_skills'],
                     requirements_text
                 )
-            
+
+            # Split bullets: 40% to summary, 60% to most recent job
+            if generated_bullets:
+                split_point = max(1, len(generated_bullets) * 4 // 10)  # 40%
+                summary_bullets = generated_bullets[:split_point]
+                job_bullets = generated_bullets[split_point:]
+
+                print(f'\n📊 Distributing {len(generated_bullets)} bullets:')
+                print(f'   • Summary: {len(summary_bullets)} bullets')
+                print(f'   • Job Experience: {len(job_bullets)} bullets')
+            else:
+                summary_bullets = []
+                job_bullets = []
+
+            # Insert bullets
             self.insert_summary_bullets(summary_bullets)
-            
+
             if job_bullets:
-                self.insert_job_bullets(job_bullets, 'Early Warning', '2024')
+                # Try to find the most recent job (look for 2024, then 2023, etc.)
+                job_inserted = False
+                for year in ['2024', '2023', '2022', '2021', '2020']:
+                    for para in self.doc.paragraphs:
+                        if year in para.text and ('Engineer' in para.text or 'Developer' in para.text or 'Architect' in para.text):
+                            # Extract company name from paragraph
+                            company_name = para.text.split(',')[0].split('-')[0].strip()
+                            if self.insert_job_bullets(job_bullets, company_name, year):
+                                job_inserted = True
+                                break
+                    if job_inserted:
+                        break
+
+                if not job_inserted:
+                    print('  ⚠️  Could not find recent job section, skipping job bullets')
+                    # Add them to summary instead
+                    print('  ↳ Adding remaining bullets to summary')
+                    self.insert_summary_bullets(job_bullets)
             
             self.update_technical_skills(requirements)
             output_path = self.save_resume()
