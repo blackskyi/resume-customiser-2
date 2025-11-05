@@ -1068,10 +1068,29 @@ class ResumeUpdater:
                 # Try to find the most recent job (look for 2024, then 2023, etc.)
                 job_inserted = False
                 for year in ['2024', '2023', '2022', '2021', '2020']:
-                    for para in self.doc.paragraphs:
-                        if year in para.text and ('Engineer' in para.text or 'Developer' in para.text or 'Architect' in para.text):
-                            # Extract company name from paragraph
-                            company_name = para.text.split(',')[0].split('-')[0].strip()
+                    for i, para in enumerate(self.doc.paragraphs):
+                        # Look for year in a window of paragraphs (current and prev/next 2 lines)
+                        year_found_nearby = False
+                        company_line = None
+
+                        # Check previous 2, current, and next 2 lines for year
+                        for j in range(max(0, i-2), min(i+3, len(self.doc.paragraphs))):
+                            if year in self.doc.paragraphs[j].text:
+                                year_found_nearby = True
+                                # Check if this line has company/client info
+                                if 'Client:' in self.doc.paragraphs[j].text:
+                                    company_line = self.doc.paragraphs[j].text
+                                break
+
+                        # Current paragraph should have job title indicators
+                        if year_found_nearby and ('Engineer' in para.text or 'Developer' in para.text or 'Architect' in para.text or '||' in para.text):
+                            # Extract company name
+                            if company_line:
+                                company_name = company_line.split(',')[0].split('-')[0].strip()
+                                company_name = company_name.replace('Client:', '').strip()
+                            else:
+                                company_name = para.text.split(',')[0].split('-')[0].strip()
+
                             if self.insert_job_bullets(job_bullets, company_name, year):
                                 job_inserted = True
                                 break
