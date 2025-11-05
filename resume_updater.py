@@ -138,13 +138,17 @@ class ResumeUpdater:
                 'YAML', 'JSON', 'XML', 'HCL', 'TOML',
                 # OS & Platforms
                 'Linux', 'Unix', 'RHEL', 'CentOS', 'Ubuntu', 'Debian', 'Windows Server',
+                'Windows Administration', 'System Administration', 'Infrastructure Engineer', 'Infrastructure Engineering',
                 # Networking
                 'DNS', 'Load balancing', 'CDN', 'VPN', 'Firewall', 'WAF',
                 'TCP/IP', 'HTTP', 'HTTPS',
+                # AI/ML
+                'AI/ML', 'Machine Learning', 'AI requirements', 'ML requirements',
                 # Other
                 'Automation', 'Orchestration', 'Configuration management',
                 'Infrastructure monitoring', 'Application performance monitoring',
-                'Log aggregation', 'Incident management', 'Change management'
+                'Log aggregation', 'Incident management', 'Change management',
+                'Financial Services'
             ]
 
             job_desc_lower = job_description.lower()
